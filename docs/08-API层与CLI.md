@@ -547,3 +547,27 @@ def with_memory_context(state: dict, user_prompt: str) -> str:
 ```
 
 在用户 prompt 前注入跨会话记忆上下文。所有节点的 `_invoke_json_agent` 调用都会经过这个函数。
+
+---
+
+## 7. 前端对接要点（补充）
+
+主 UI 在 `front/agent_front/src/App.vue`，只走 **SSE** `/api/v1/research/stream`。
+
+```
+关键实现细节（完整图见 docs/11）:
+1. fetch + ReadableStream + buffer.split('\\n\\n') 防粘包
+2. 事件 type: status | phase | route | final | error
+3. phase 写入 progressLogs（去重，窗口约 6 条）
+4. final 删除 status 气泡，markdownToHtml 轻量渲染
+5. 请求体仅带 query/user_id/thread_id/tenant_id
+6. 新建会话不自动更换 threadId → 后端记忆可能连续
+```
+
+Schema 约束（`api/schemas/research.py`）：
+
+| 字段 | 约束 |
+|------|------|
+| query | 必填，min_length=1 |
+| max_iterations | 可选，1..6；null 用服务端配置 |
+| enable_memory | 可选 bool；null 用服务端配置 |
