@@ -39,6 +39,11 @@ htmlcov/
 .tox/
 .nox/
 
+# ==================== Database ====================
+*.db
+data/*
+!data/.gitkeep
+
 # ==================== AI Tools ====================
 .omo/
 .opencode/
