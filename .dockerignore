@@ -1,0 +1,44 @@
+# Git
+.git
+.gitignore
+
+# Python
+__pycache__
+*.pyc
+*.pyo
+*.egg-info
+dist/
+build/
+.pytest_cache/
+.venv/
+
+# IDE
+.idea/
+.vscode/
+
+# Environment
+.env
+.env.*
+
+# Docker
+docker-compose.override.yml
+
+# OS
+.DS_Store
+Thumbs.db
+
+# AI Tools
+.omo/
+.opencode/
+.swarm/
+.remember/
+
+# Output
+output/
+
+# Frontend (不需要复制到后端镜像)
+front/
+
+# Data
+data/
+*.db

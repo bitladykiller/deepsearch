@@ -1,0 +1,102 @@
+# ============================================================
+# Deep Research - Docker Compose
+# ============================================================
+# 服务：
+#   - postgres   : 记忆系统 + checkpointer（仅内部访问）
+#   - milvus     : 向量数据库（仅内部访问）
+#   - backend    : FastAPI API 服务（端口 8080）
+#   - frontend   : Vue SPA + Nginx 反向代理（端口 3000）
+# ============================================================
+
+services:
+  # ---- PostgreSQL ----
+  postgres:
+    image: postgres:16-alpine
+    container_name: deepresearch-postgres
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-deepresearch}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-deepresearch123}
+      POSTGRES_DB: ${POSTGRES_DB:-deepresearch}
+    networks:
+      - deep_research_net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-deepresearch}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # ---- Milvus (etcd 嵌入 + minio 单机) ----
+  milvus:
+    image: milvusdb/milvus:v2.5-latest
+    container_name: deepresearch-milvus
+    volumes:
+      - milvus_data:/var/lib/milvus
+    environment:
+      ETCD_USE_EMBED: "true"
+      COMMON_STORAGETYPE: local
+    networks:
+      - deep_research_net
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:9091/healthz || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    restart: unless-stopped
+
+  # ---- Backend (FastAPI) ----
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: deepresearch-backend
+    volumes:
+      - ./config.json:/app/config.json:ro
+      - ./.env:/app/.env:ro
+      - app_data:/app/data
+    networks:
+      - deep_research_net
+    depends_on:
+      postgres:
+        condition: service_healthy
+      milvus:
+        condition: service_healthy
+    environment:
+      POSTGRES_DSN: postgresql://${POSTGRES_USER:-deepresearch}:${POSTGRES_PASSWORD:-deepresearch123}@postgres:5432/${POSTGRES_DB:-deepresearch}
+      REDIS_URL: ""
+      MILVUS_HOST: milvus
+      MILVUS_PORT: 19530
+    ports:
+      - "8080:8000"
+    restart: unless-stopped
+
+  # ---- Frontend (Nginx + Vue SPA) ----
+  frontend:
+    build:
+      context: ./front/agent_front
+      dockerfile: Dockerfile
+    container_name: deepresearch-frontend
+    networks:
+      - deep_research_net
+    depends_on:
+      - backend
+    ports:
+      - "3000:80"
+    restart: unless-stopped
+
+# ---- 命名卷 ----
+volumes:
+  pg_data:
+    driver: local
+  milvus_data:
+    driver: local
+  app_data:
+    driver: local
+
+# ---- 内部网络 ----
+networks:
+  deep_research_net:
+    driver: bridge
