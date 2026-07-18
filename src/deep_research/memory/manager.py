@@ -37,7 +37,7 @@ except ImportError:
     # 降级到旧包
     from langchain_community.vectorstores import Milvus as MilvusVectorStore
 
-logger = logging.getLogger("mult_agents.memory")
+logger = logging.getLogger("deep_research.memory")
 
 
 def _parse_mysql_dsn(dsn: str) -> dict:

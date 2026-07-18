@@ -15,7 +15,7 @@ from typing import Any, Dict, List, Optional, Union
 
 from .base import BaseMemory, MemoryEntry, MemoryType
 
-logger = logging.getLogger("mult_agents.memory")
+logger = logging.getLogger("deep_research.memory")
 
 
 class BaseLongTermMemory(BaseMemory, ABC):

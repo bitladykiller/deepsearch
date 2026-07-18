@@ -11,7 +11,7 @@ from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 
 from .base import MemoryEntry, MemoryType
 
-logger = logging.getLogger("mult_agents.memory")
+logger = logging.getLogger("deep_research.memory")
 
 
 def create_memory_checkpoint(

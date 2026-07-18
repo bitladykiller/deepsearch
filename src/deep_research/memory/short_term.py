@@ -13,7 +13,7 @@ from langgraph.checkpoint.base import BaseCheckpointSaver
 
 from .base import BaseMemory, MemoryEntry, MemoryType
 
-logger = logging.getLogger("mult_agents.memory")
+logger = logging.getLogger("deep_research.memory")
 
 
 class ConversationBuffer:
