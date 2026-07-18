@@ -26,9 +26,9 @@ except Exception:
     redis = None
 
 try:
-    import psycopg
+    import pymysql
 except Exception:
-    psycopg = None
+    pymysql = None
 
 # 使用 langchain-milvus 新包（类名是 Milvus，不是 MilvusVectorStore）
 try:
@@ -40,6 +40,20 @@ except ImportError:
 logger = logging.getLogger("mult_agents.memory")
 
 
+def _parse_mysql_dsn(dsn: str) -> dict:
+    """将 MySQL DSN URL 解析为 pymysql.connect 参数。"""
+    from urllib.parse import urlparse
+    parsed = urlparse(dsn)
+    return {
+        "host": parsed.hostname or "127.0.0.1",
+        "port": parsed.port or 3306,
+        "user": parsed.username or "root",
+        "password": parsed.password or "",
+        "database": parsed.path.lstrip("/") if parsed.path else "",
+        "charset": "utf8mb4",
+    }
+
+
 class MemoryManager:
     def __init__(
         self,
@@ -48,8 +62,8 @@ class MemoryManager:
         short_term_summary_threshold: int = 20,
         db_path: Optional[str] = None,
         tenant_id: str = "default_tenant",
-        short_term_backend: str = "postgres",
-        long_term_backend: str = "postgres",
+        short_term_backend: str = "mysql",
+        long_term_backend: str = "mysql",
         long_term_scope: str = "user",
         save_conversation_task: bool = False,
         enable_milvus: bool = True,
@@ -79,6 +93,7 @@ class MemoryManager:
         self.episodic = EpisodicMemoryStore(db_path=db_path)
         self._redis_client = None
         self._postgres_dsn = postgres_dsn
+        self._mysql_conn_params = _parse_mysql_dsn(postgres_dsn) if postgres_dsn and pymysql else {}
         self._milvus_store = None
         self._summary_llm = None
         self._last_trace: Dict[str, Any] = {}
@@ -90,13 +105,13 @@ class MemoryManager:
             self._init_milvus(milvus_host, milvus_port, milvus_collection, embedding_api_key, embedding_model)
         self._init_summary_llm(embedding_api_key, summary_model)
         logger.info(
-            "记忆管理器初始化完成 | short_term=%s | long_term=%s | scope=%s | save_task=%s | redis=%s | postgres=%s | milvus=%s",
+            "记忆管理器初始化完成 | short_term=%s | long_term=%s | scope=%s | save_task=%s | redis=%s | mysql=%s | milvus=%s",
             self.short_term_backend,
             self.long_term_backend,
             self.long_term_scope,
             self.save_conversation_task,
             bool(self._redis_client),
-            bool(psycopg and self._postgres_dsn),
+            bool(pymysql and self._mysql_conn_params),
             bool(self._milvus_store),
         )
 
@@ -117,82 +132,88 @@ class MemoryManager:
                 logger.warning("Redis 初始化失败，降级内存短期记忆: %s", exc)
 
     def _init_postgres(self) -> None:
-        if not self._postgres_dsn or psycopg is None:
+        if not self._mysql_conn_params or pymysql is None:
             return
         try:
-            with psycopg.connect(self._postgres_dsn) as conn:
+            with pymysql.connect(**self._mysql_conn_params) as conn:
                 with conn.cursor() as cur:
-                    if self.enable_long_term and self.long_term_backend == "postgres":
+                    if self.enable_long_term and self.long_term_backend == "mysql":
                         cur.execute(
                             """
                             CREATE TABLE IF NOT EXISTS memory_entries (
-                                id TEXT PRIMARY KEY,
-                                tenant_id TEXT NOT NULL,
-                                user_id TEXT NOT NULL,
-                                thread_id TEXT,
-                                memory_type TEXT NOT NULL,
-                                namespace TEXT,
-                                content JSONB NOT NULL,
+                                id VARCHAR(255) PRIMARY KEY,
+                                tenant_id VARCHAR(255) NOT NULL,
+                                user_id VARCHAR(255) NOT NULL,
+                                thread_id VARCHAR(255),
+                                memory_type VARCHAR(50) NOT NULL,
+                                namespace VARCHAR(255),
+                                content JSON NOT NULL,
                                 summary TEXT,
-                                metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
-                                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-                                updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                                metadata JSON NOT NULL DEFAULT '{}',
+                                created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                                updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
                             )
                             """
                         )
-                        cur.execute(
-                            """
-                            CREATE INDEX IF NOT EXISTS idx_memory_entries_lookup
-                            ON memory_entries (tenant_id, user_id, memory_type, created_at DESC)
-                            """
-                        )
+                        try:
+                            cur.execute(
+                                """
+                                CREATE INDEX idx_memory_entries_lookup
+                                ON memory_entries (tenant_id, user_id, memory_type, created_at DESC)
+                                """
+                            )
+                        except Exception:
+                            pass  # 忽略重复索引错误
                         cur.execute(
                             """
                             CREATE TABLE IF NOT EXISTS user_profiles (
-                                tenant_id TEXT NOT NULL,
-                                user_id TEXT NOT NULL,
-                                profile JSONB NOT NULL,
-                                updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                                tenant_id VARCHAR(255) NOT NULL,
+                                user_id VARCHAR(255) NOT NULL,
+                                profile JSON NOT NULL,
+                                updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
                                 PRIMARY KEY (tenant_id, user_id)
                             )
                             """
                         )
-                    if self.short_term_backend == "postgres":
+                    if self.short_term_backend == "mysql":
                         cur.execute(
                             """
                             CREATE TABLE IF NOT EXISTS short_term_messages (
-                                id TEXT PRIMARY KEY,
-                                tenant_id TEXT NOT NULL,
-                                user_id TEXT NOT NULL,
-                                thread_id TEXT NOT NULL,
-                                role TEXT NOT NULL,
+                                id VARCHAR(255) PRIMARY KEY,
+                                tenant_id VARCHAR(255) NOT NULL,
+                                user_id VARCHAR(255) NOT NULL,
+                                thread_id VARCHAR(255) NOT NULL,
+                                role VARCHAR(50) NOT NULL,
                                 content TEXT NOT NULL,
-                                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                                created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
                             )
                             """
                         )
-                        cur.execute(
-                            """
-                            CREATE INDEX IF NOT EXISTS idx_short_term_lookup
-                            ON short_term_messages (tenant_id, user_id, thread_id, created_at DESC)
-                            """
-                        )
+                        try:
+                            cur.execute(
+                                """
+                                CREATE INDEX idx_short_term_lookup
+                                ON short_term_messages (tenant_id, user_id, thread_id, created_at DESC)
+                                """
+                            )
+                        except Exception:
+                            pass  # 忽略重复索引错误
                         cur.execute(
                             """
                             CREATE TABLE IF NOT EXISTS short_term_summaries (
-                                tenant_id TEXT NOT NULL,
-                                user_id TEXT NOT NULL,
-                                thread_id TEXT NOT NULL,
+                                tenant_id VARCHAR(255) NOT NULL,
+                                user_id VARCHAR(255) NOT NULL,
+                                thread_id VARCHAR(255) NOT NULL,
                                 summary TEXT NOT NULL,
-                                updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                                updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
                                 PRIMARY KEY (tenant_id, user_id, thread_id)
                             )
                             """
                         )
                     conn.commit()
         except Exception as exc:
-            logger.warning("PostgreSQL 初始化失败，降级 SQLite: %s", exc)
-            self._postgres_dsn = None
+            logger.warning("MySQL 初始化失败，降级 SQLite: %s", exc)
+            self._mysql_conn_params = {}
 
     def _init_milvus(
         self,
@@ -216,7 +237,7 @@ class MemoryManager:
                 auto_id=True,
             )
         except Exception as exc:
-            logger.warning("Milvus 初始化失败，降级 PostgreSQL 检索: %s", exc)
+            logger.warning("Milvus 初始化失败，降级 MySQL 检索: %s", exc)
             self._milvus_store = None
 
     def _init_summary_llm(self, api_key: Optional[str], summary_model: str) -> None:
@@ -293,9 +314,9 @@ class MemoryManager:
         pipe.execute()
 
     def _save_pg_short_term_message(self, tenant_id: str, user_id: str, thread_id: str, payload: Dict[str, str]) -> None:
-        if not self._postgres_dsn or psycopg is None:
+        if not self._mysql_conn_params or pymysql is None:
             return
-        with psycopg.connect(self._postgres_dsn) as conn:
+        with pymysql.connect(**self._mysql_conn_params) as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     """
@@ -315,9 +336,9 @@ class MemoryManager:
                 conn.commit()
 
     def _get_pg_short_term_messages(self, tenant_id: str, user_id: str, thread_id: str) -> List[Dict[str, str]]:
-        if not self._postgres_dsn or psycopg is None:
+        if not self._mysql_conn_params or pymysql is None:
             return []
-        with psycopg.connect(self._postgres_dsn) as conn:
+        with pymysql.connect(**self._mysql_conn_params) as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     """
@@ -332,25 +353,24 @@ class MemoryManager:
         return [{"role": row[0], "content": row[1]} for row in rows]
 
     def _set_pg_short_term_summary(self, tenant_id: str, user_id: str, thread_id: str, summary: str) -> None:
-        if not self._postgres_dsn or psycopg is None:
+        if not self._mysql_conn_params or pymysql is None:
             return
-        with psycopg.connect(self._postgres_dsn) as conn:
+        with pymysql.connect(**self._mysql_conn_params) as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     """
                     INSERT INTO short_term_summaries (tenant_id, user_id, thread_id, summary, updated_at)
                     VALUES (%s, %s, %s, %s, NOW())
-                    ON CONFLICT (tenant_id, user_id, thread_id)
-                    DO UPDATE SET summary = EXCLUDED.summary, updated_at = NOW()
+                    ON DUPLICATE KEY UPDATE summary = VALUES(summary), updated_at = NOW()
                     """,
                     (tenant_id, user_id, thread_id, summary),
                 )
                 conn.commit()
 
     def _get_pg_short_term_summary(self, tenant_id: str, user_id: str, thread_id: str) -> str:
-        if not self._postgres_dsn or psycopg is None:
+        if not self._mysql_conn_params or pymysql is None:
             return ""
-        with psycopg.connect(self._postgres_dsn) as conn:
+        with pymysql.connect(**self._mysql_conn_params) as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     """
@@ -364,7 +384,7 @@ class MemoryManager:
         return row[0] if row else ""
 
     def _compress_pg_thread(self, tenant_id: str, user_id: str, thread_id: str) -> None:
-        if not self._postgres_dsn or psycopg is None:
+        if not self._mysql_conn_params or pymysql is None:
             return
         history = self._get_pg_short_term_messages(tenant_id, user_id, thread_id)
         if len(history) <= self.short_term_max_messages:
@@ -374,7 +394,7 @@ class MemoryManager:
         keep_messages = history[split_at:]
         existing_summary = self._get_pg_short_term_summary(tenant_id, user_id, thread_id)
         new_summary = self._summarize_text(existing_summary, to_summarize)
-        with psycopg.connect(self._postgres_dsn) as conn:
+        with pymysql.connect(**self._mysql_conn_params) as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     """
@@ -403,35 +423,34 @@ class MemoryManager:
         self._set_pg_short_term_summary(tenant_id, user_id, thread_id, new_summary)
 
     def _upsert_profile_pg(self, tenant_id: str, user_id: str, profile: Dict[str, Any]) -> None:
-        if not self._postgres_dsn or psycopg is None:
+        if not self._mysql_conn_params or pymysql is None:
             return
-        with psycopg.connect(self._postgres_dsn) as conn:
+        with pymysql.connect(**self._mysql_conn_params) as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     """
                     INSERT INTO user_profiles (tenant_id, user_id, profile, updated_at)
-                    VALUES (%s, %s, %s::jsonb, NOW())
-                    ON CONFLICT (tenant_id, user_id)
-                    DO UPDATE SET profile = EXCLUDED.profile, updated_at = NOW()
+                    VALUES (%s, %s, %s, NOW())
+                    ON DUPLICATE KEY UPDATE profile = VALUES(profile), updated_at = NOW()
                     """,
                     (tenant_id, user_id, json.dumps(profile, ensure_ascii=False)),
                 )
                 conn.commit()
 
     def _insert_memory_pg(self, entry: MemoryEntry, summary: str = "") -> None:
-        if not self._postgres_dsn or psycopg is None:
+        if not self._mysql_conn_params or pymysql is None:
             return
-        with psycopg.connect(self._postgres_dsn) as conn:
+        with pymysql.connect(**self._mysql_conn_params) as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     """
                     INSERT INTO memory_entries
                     (id, tenant_id, user_id, thread_id, memory_type, namespace, content, summary, metadata, created_at, updated_at)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s::jsonb, %s, %s::jsonb, %s, NOW())
-                    ON CONFLICT (id) DO UPDATE SET
-                        content = EXCLUDED.content,
-                        summary = EXCLUDED.summary,
-                        metadata = EXCLUDED.metadata,
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
+                    ON DUPLICATE KEY UPDATE
+                        content = VALUES(content),
+                        summary = VALUES(summary),
+                        metadata = VALUES(metadata),
                         updated_at = NOW()
                     """,
                     (
@@ -497,7 +516,7 @@ class MemoryManager:
             self._redis_client.expire(key, self.short_term_ttl)
             self._compress_redis_thread(tenant, user_id, thread_id)
             return
-        if self.short_term_backend == "postgres" and self._postgres_dsn and psycopg:
+        if self.short_term_backend == "mysql" and self._mysql_conn_params and pymysql:
             self._save_pg_short_term_message(tenant, user_id, thread_id, payload)
             self._compress_pg_thread(tenant, user_id, thread_id)
             return
@@ -531,7 +550,7 @@ class MemoryManager:
         if self.short_term_backend == "redis" and self._redis_client is not None:
             key = self._redis_summary_key(tenant, user_id, thread_id)
             return self._redis_client.get(key) or ""
-        if self.short_term_backend == "postgres" and self._postgres_dsn and psycopg:
+        if self.short_term_backend == "mysql" and self._mysql_conn_params and pymysql:
             return self._get_pg_short_term_summary(tenant, user_id, thread_id)
         if self._redis_client is None:
             messages = self.short_term.get_messages(thread_id, include_summary=True, last_n=0)
@@ -560,7 +579,7 @@ class MemoryManager:
                 if summary:
                     return [SystemMessage(content=f"历史对话摘要：{summary}"), *messages]
             return messages
-        if self.short_term_backend == "postgres" and self._postgres_dsn and psycopg:
+        if self.short_term_backend == "mysql" and self._mysql_conn_params and pymysql:
             raw = self._get_pg_short_term_messages(tenant, user_id, thread_id)
             if last_n:
                 raw = raw[-last_n:]
@@ -581,7 +600,7 @@ class MemoryManager:
         tenant_id: Optional[str] = None,
     ) -> bool:
         tenant = tenant_id or self.default_tenant_id
-        if self.short_term_backend == "postgres" and self._postgres_dsn and psycopg:
+        if self.short_term_backend == "mysql" and self._mysql_conn_params and pymysql:
             return len(self._get_pg_short_term_messages(tenant, user_id, thread_id)) == 0
         if self.short_term_backend == "redis" and self._redis_client is not None:
             key = self._redis_thread_key(tenant, user_id, thread_id)
@@ -630,8 +649,8 @@ class MemoryManager:
             summary_keys = self._redis_client.keys(f"ma:short:summary:*:*:{thread_id}")
             if summary_keys:
                 self._redis_client.delete(*summary_keys)
-        if self.short_term_backend == "postgres" and self._postgres_dsn and psycopg:
-            with psycopg.connect(self._postgres_dsn) as conn:
+        if self.short_term_backend == "mysql" and self._mysql_conn_params and pymysql:
+            with pymysql.connect(**self._mysql_conn_params) as conn:
                 with conn.cursor() as cur:
                     cur.execute("DELETE FROM short_term_messages WHERE thread_id = %s", (thread_id,))
                     cur.execute("DELETE FROM short_term_summaries WHERE thread_id = %s", (thread_id,))
@@ -644,8 +663,8 @@ class MemoryManager:
             threads = {item.rsplit(":", 1)[-1] for item in keys if "summary" not in item}
             if threads:
                 return sorted(threads)
-        if self.short_term_backend == "postgres" and self._postgres_dsn and psycopg:
-            with psycopg.connect(self._postgres_dsn) as conn:
+        if self.short_term_backend == "mysql" and self._mysql_conn_params and pymysql:
+            with pymysql.connect(**self._mysql_conn_params) as conn:
                 with conn.cursor() as cur:
                     cur.execute("SELECT DISTINCT thread_id FROM short_term_messages")
                     rows = cur.fetchall()
@@ -666,7 +685,7 @@ class MemoryManager:
         tenant = tenant_id or self.default_tenant_id
         existing = self.get_user_profile(user_id, tenant_id=tenant)
         merged_profile = merge_user_profile(existing, profile) if merge and existing else profile
-        if self.long_term_backend == "postgres" and self._postgres_dsn and psycopg:
+        if self.long_term_backend == "mysql" and self._mysql_conn_params and pymysql:
             memory_id = str(uuid4())
             self._upsert_profile_pg(tenant, user_id, merged_profile)
             self._index_memory_milvus(
@@ -700,8 +719,8 @@ class MemoryManager:
         if not self.enable_long_term:
             return None
         tenant = tenant_id or self.default_tenant_id
-        if self.long_term_backend == "postgres" and self._postgres_dsn and psycopg:
-            with psycopg.connect(self._postgres_dsn) as conn:
+        if self.long_term_backend == "mysql" and self._mysql_conn_params and pymysql:
+            with pymysql.connect(**self._mysql_conn_params) as conn:
                 with conn.cursor() as cur:
                     cur.execute(
                         "SELECT profile FROM user_profiles WHERE tenant_id = %s AND user_id = %s",
@@ -723,7 +742,7 @@ class MemoryManager:
         if not self.enable_long_term:
             return str(uuid4())
         tenant = tenant_id or self.default_tenant_id
-        memory_id = str(uuid4()) if self.long_term_backend == "postgres" else self.semantic.save_fact(user_id, fact, category)
+        memory_id = str(uuid4()) if self.long_term_backend == "mysql" else self.semantic.save_fact(user_id, fact, category)
         entry = MemoryEntry(
             id=memory_id,
             content={"text": fact, "category": category or "general"},
@@ -733,7 +752,7 @@ class MemoryManager:
             namespace=f"facts/{category or 'general'}",
             metadata={"tenant_id": tenant, "category": category or "general"},
         )
-        if self.long_term_backend == "postgres" and self._postgres_dsn and psycopg:
+        if self.long_term_backend == "mysql" and self._mysql_conn_params and pymysql:
             self._insert_memory_pg(entry, summary=fact[:500])
         if self.enable_milvus:
             self._index_memory_milvus(
@@ -773,7 +792,7 @@ class MemoryManager:
                 len(docs),
             )
         except Exception as exc:
-            logger.warning("Milvus 检索失败，降级 PostgreSQL: %s", exc)
+            logger.warning("Milvus 检索失败，降级 MySQL: %s", exc)
             return []
         entries: List[MemoryEntry] = []
         current_raw_hits: List[Dict[str, Any]] = []
@@ -861,7 +880,7 @@ class MemoryManager:
         thread_id: Optional[str],
         limit: int,
     ) -> List[MemoryEntry]:
-        if not self._postgres_dsn or psycopg is None:
+        if not self._mysql_conn_params or pymysql is None:
             return []
         sql = """
             SELECT id, memory_type, namespace, content, metadata, created_at
@@ -873,7 +892,7 @@ class MemoryManager:
         params: List[Any] = [tenant_id, user_id, memory_type]
         if query:
             pattern = f"%{query}%"
-            sql += " AND (summary ILIKE %s OR content::text ILIKE %s)"
+            sql += " AND (summary LIKE %s OR CAST(content AS CHAR) LIKE %s)"
             params.extend([pattern, pattern])
         if namespace:
             sql += " AND namespace = %s"
@@ -883,7 +902,7 @@ class MemoryManager:
             params.append(thread_id)
         sql += " ORDER BY created_at DESC LIMIT %s"
         params.append(limit)
-        with psycopg.connect(self._postgres_dsn) as conn:
+        with pymysql.connect(**self._mysql_conn_params) as conn:
             with conn.cursor() as cur:
                 cur.execute(sql, params)
                 rows = cur.fetchall()
@@ -942,7 +961,7 @@ class MemoryManager:
                     json.dumps(hit_preview, ensure_ascii=False),
                 )
                 return entries
-        if self.long_term_backend == "postgres" and self._postgres_dsn and psycopg:
+        if self.long_term_backend == "mysql" and self._mysql_conn_params and pymysql:
             pg_entries = self._search_postgres(
                 tenant_id=tenant,
                 user_id=user_id,
@@ -954,9 +973,9 @@ class MemoryManager:
             )
             if pg_entries:
                 hit_preview = [str(item.content)[:120] for item in pg_entries[:3]]
-                self._annotate_entries_with_source(pg_entries, "postgres")
+                self._annotate_entries_with_source(pg_entries, "mysql")
                 logger.info(
-                    "[memory] semantic search hit | source=postgres | tenant=%s user=%s count=%d query=%s hit_preview=%s",
+                    "[memory] semantic search hit | source=mysql | tenant=%s user=%s count=%d query=%s hit_preview=%s",
                     tenant,
                     user_id,
                     len(pg_entries),
@@ -964,7 +983,7 @@ class MemoryManager:
                     json.dumps(hit_preview, ensure_ascii=False),
                 )
                 return pg_entries
-        source = "sqlite" if self.long_term_backend != "postgres" else "postgres_no_hit"
+        source = "sqlite" if self.long_term_backend != "mysql" else "mysql_no_hit"
         logger.info(
             "[memory] semantic search fallback | source=%s | tenant=%s user=%s query=%s",
             source,
@@ -990,7 +1009,7 @@ class MemoryManager:
         tenant = tenant_id or self.default_tenant_id
         memory_id = (
             str(uuid4())
-            if self.long_term_backend == "postgres"
+            if self.long_term_backend == "mysql"
             else self.episodic.save_task_record(user_id, task_type, task_data, outcome)
         )
         content = {"task_type": task_type, "task_data": task_data, "outcome": outcome or ""}
@@ -1004,7 +1023,7 @@ class MemoryManager:
             metadata={"tenant_id": tenant, "task_type": task_type},
         )
         summary = outcome or json.dumps(task_data, ensure_ascii=False)[:500]
-        if self.long_term_backend == "postgres" and self._postgres_dsn and psycopg:
+        if self.long_term_backend == "mysql" and self._mysql_conn_params and pymysql:
             self._insert_memory_pg(entry, summary=summary)
         if self.enable_milvus:
             self._index_memory_milvus(
@@ -1032,7 +1051,7 @@ class MemoryManager:
         if not self.enable_long_term:
             return []
         tenant = tenant_id or self.default_tenant_id
-        if self.long_term_backend == "postgres" and self._postgres_dsn and psycopg:
+        if self.long_term_backend == "mysql" and self._mysql_conn_params and pymysql:
             namespace = f"tasks/{task_type}" if task_type else None
             entries = self._search_postgres(
                 tenant_id=tenant,
@@ -1084,7 +1103,7 @@ class MemoryManager:
                     query[:120],
                 )
                 return entries
-        if self.long_term_backend == "postgres" and self._postgres_dsn and psycopg:
+        if self.long_term_backend == "mysql" and self._mysql_conn_params and pymysql:
             pg_entries = self._search_postgres(
                 tenant_id=tenant,
                 user_id=user_id,
@@ -1095,16 +1114,16 @@ class MemoryManager:
                 limit=limit,
             )
             if pg_entries:
-                self._annotate_entries_with_source(pg_entries, "postgres")
+                self._annotate_entries_with_source(pg_entries, "mysql")
                 logger.info(
-                    "[memory] episodic search hit | source=postgres | tenant=%s user=%s count=%d query=%s",
+                    "[memory] episodic search hit | source=mysql | tenant=%s user=%s count=%d query=%s",
                     tenant,
                     user_id,
                     len(pg_entries),
                     query[:120],
                 )
                 return pg_entries
-        source = "sqlite" if self.long_term_backend != "postgres" else "postgres_no_hit"
+        source = "sqlite" if self.long_term_backend != "mysql" else "mysql_no_hit"
         logger.info(
             "[memory] episodic search fallback | source=%s | tenant=%s user=%s query=%s",
             source,
@@ -1427,9 +1446,9 @@ class MemoryManager:
         if memory_types is None:
             memory_types = ["semantic", "episodic", "short_term"]
         results = {}
-        if "semantic" in memory_types and self.long_term_backend != "postgres":
+        if "semantic" in memory_types and self.long_term_backend != "mysql":
             results["semantic"] = self.semantic.clear(user_id=user_id)
-        if "episodic" in memory_types and self.long_term_backend != "postgres":
+        if "episodic" in memory_types and self.long_term_backend != "mysql":
             results["episodic"] = self.episodic.clear(user_id=user_id)
         if "short_term" in memory_types:
             keys = []
@@ -1438,8 +1457,8 @@ class MemoryManager:
                 keys.extend(self._redis_client.keys(f"ma:short:summary:{tenant}:{user_id}:*"))
                 if keys:
                     self._redis_client.delete(*keys)
-            if self.short_term_backend == "postgres" and self._postgres_dsn and psycopg:
-                with psycopg.connect(self._postgres_dsn) as conn:
+            if self.short_term_backend == "mysql" and self._mysql_conn_params and pymysql:
+                with pymysql.connect(**self._mysql_conn_params) as conn:
                     with conn.cursor() as cur:
                         cur.execute(
                             "DELETE FROM short_term_messages WHERE tenant_id = %s AND user_id = %s",
@@ -1451,8 +1470,8 @@ class MemoryManager:
                         )
                         conn.commit()
             results["short_term"] = len(keys)
-        if self.long_term_backend == "postgres" and self._postgres_dsn and psycopg:
-            with psycopg.connect(self._postgres_dsn) as conn:
+        if self.long_term_backend == "mysql" and self._mysql_conn_params and pymysql:
+            with pymysql.connect(**self._mysql_conn_params) as conn:
                 with conn.cursor() as cur:
                     cur.execute(
                         "DELETE FROM memory_entries WHERE tenant_id = %s AND user_id = %s",
@@ -1473,13 +1492,13 @@ class MemoryManager:
                 "backend": self.short_term_backend,
             },
             "semantic": {
-                "namespaces": [] if self.long_term_backend == "postgres" else self.semantic.list_namespaces(user_id),
+                "namespaces": [] if self.long_term_backend == "mysql" else self.semantic.list_namespaces(user_id),
             },
             "episodic": {
-                "namespaces": [] if self.long_term_backend == "postgres" else self.episodic.list_namespaces(user_id),
+                "namespaces": [] if self.long_term_backend == "mysql" else self.episodic.list_namespaces(user_id),
             },
             "backends": {
-                "postgres": bool(self._postgres_dsn and psycopg and self.long_term_backend == "postgres"),
+                "mysql": bool(self._mysql_conn_params and pymysql and self.long_term_backend == "mysql"),
                 "milvus": bool(self._milvus_store and self.enable_milvus and self.enable_long_term),
             },
             "modes": {

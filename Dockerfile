@@ -11,9 +11,9 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
-# 安装系统依赖（编译 psycopg、jieba 等可能需要的工具）
+# 安装系统依赖
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends gcc libpq-dev && \
+    apt-get install -y --no-install-recommends gcc default-libmysqlclient-dev pkg-config && \
     rm -rf /var/lib/apt/lists/*
 
 # ---- 依赖安装层（利用 Docker 缓存） ----

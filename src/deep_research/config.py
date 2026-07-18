@@ -36,7 +36,7 @@ class AppConfig:
     enable_milvus: bool
     memory_top_k: int
     redis_url: str
-    postgres_dsn: str
+    mysql_dsn: str
     milvus_host: str
     milvus_port: int
     milvus_collection: str
@@ -114,8 +114,8 @@ class AppConfig:
         enable_milvus = AppConfig._resolve_bool(data, "enable_milvus", "ENABLE_MILVUS", True)
         memory_top_k = AppConfig._resolve_int(data, "memory_top_k", "MEMORY_TOP_K", 6)
         redis_url = AppConfig._resolve_str(data, "redis_url", "REDIS_URL", "redis://127.0.0.1:6379")
-        postgres_dsn = AppConfig._resolve_str(
-            data, "postgres_dsn", "POSTGRES_DSN", "postgresql://127.0.0.1:5432/postgres"
+        mysql_dsn = AppConfig._resolve_str(
+            data, "mysql_dsn", "MYSQL_DSN", "mysql+pymysql://deepresearch:deepresearch123@127.0.0.1:3306/deepresearch"
         )
         milvus_host = AppConfig._resolve_str(data, "milvus_host", "MILVUS_HOST", "127.0.0.1")
         milvus_port = AppConfig._resolve_int(data, "milvus_port", "MILVUS_PORT", 19530)
@@ -139,7 +139,7 @@ class AppConfig:
             enable_milvus=enable_milvus,
             memory_top_k=memory_top_k,
             redis_url=redis_url,
-            postgres_dsn=postgres_dsn,
+            mysql_dsn=mysql_dsn,
             milvus_host=milvus_host,
             milvus_port=milvus_port,
             milvus_collection=milvus_collection,

@@ -91,7 +91,7 @@ def build_memory_manager(config: AppConfig):
             save_conversation_task=config.save_conversation_task,
             enable_milvus=config.enable_milvus,
             redis_url=config.redis_url,
-            postgres_dsn=config.postgres_dsn,
+            postgres_dsn=config.mysql_dsn,
             milvus_host=config.milvus_host,
             milvus_port=config.milvus_port,
             milvus_collection=config.milvus_collection,
@@ -106,42 +106,9 @@ _CHECKPOINTER_CONTEXT = None
 
 
 def build_checkpointer(config: AppConfig):
-    """构建 LangGraph checkpointer（PostgreSQL > Redis > 内存降级）。"""
+    """构建 LangGraph checkpointer（Redis > 内存降级）。"""
     global _CHECKPOINTER_CONTEXT
     backend = config.checkpointer_backend
-
-    if backend in {"postgres", "auto"} and config.enable_memory and config.postgres_dsn:
-        postgres_saver = None
-        postgres_import_error = ""
-        try:
-            module = importlib.import_module("langgraph.checkpoint.postgres")
-            postgres_saver = getattr(module, "PostgresSaver", None)
-        except Exception as exc:
-            postgres_import_error = str(exc)
-        if postgres_saver is None:
-            try:
-                module = importlib.import_module("langgraph_checkpoint_postgres")
-                postgres_saver = getattr(module, "PostgresSaver", None)
-            except Exception as exc:
-                postgres_import_error = postgres_import_error or str(exc)
-        if postgres_saver is None:
-            message = (
-                "PostgreSQL checkpointer 模块不可用。请安装: pip install langgraph-checkpoint-postgres "
-                f"| import_error={postgres_import_error or 'unknown'}"
-            )
-            if backend == "postgres":
-                logger.warning(message)
-            else:
-                logger.info(message)
-        else:
-            try:
-                _CHECKPOINTER_CONTEXT = postgres_saver.from_conn_string(config.postgres_dsn)
-                checkpointer = _CHECKPOINTER_CONTEXT.__enter__()
-                checkpointer.setup()
-                logger.info("使用 PostgreSQL checkpointer")
-                return checkpointer
-            except Exception as exc:
-                logger.warning("PostgreSQL checkpointer 初始化失败: %s", exc)
 
     if backend in {"redis", "auto"} and config.enable_memory and config.redis_url:
         from langgraph.checkpoint.redis import RedisSaver

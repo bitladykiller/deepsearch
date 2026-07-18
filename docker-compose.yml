@@ -2,28 +2,48 @@
 # Deep Research - Docker Compose
 # ============================================================
 # 服务：
-#   - postgres   : 记忆系统 + checkpointer（仅内部访问）
+#   - mysql      : 记忆系统存储（仅内部访问）
+#   - redis      : 短期缓存 + LangGraph checkpointer（仅内部访问）
 #   - milvus     : 向量数据库（仅内部访问）
 #   - backend    : FastAPI API 服务（端口 8080）
 #   - frontend   : Vue SPA + Nginx 反向代理（端口 3000）
 # ============================================================
 
 services:
-  # ---- PostgreSQL ----
-  postgres:
-    image: postgres:16-alpine
+  # ---- MySQL ----
+  mysql:
+    image: mysql:8.0
     pull_policy: if_not_present
-    container_name: deepresearch-postgres
+    container_name: deepresearch-mysql
     volumes:
-      - pg_data:/var/lib/postgresql/data
+      - mysql_data:/var/lib/mysql
     environment:
-      POSTGRES_USER: ${POSTGRES_USER:-deepresearch}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-deepresearch123}
-      POSTGRES_DB: ${POSTGRES_DB:-deepresearch}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-deepresearch123}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-deepresearch}
+      MYSQL_USER: ${MYSQL_USER:-deepresearch}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-deepresearch123}
+    command: --default-authentication-plugin=mysql_native_password --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci
     networks:
       - deep_research_net
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-deepresearch}"]
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-p${MYSQL_ROOT_PASSWORD:-deepresearch123}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    restart: unless-stopped
+
+  # ---- Redis ----
+  redis:
+    image: redis:7-alpine
+    pull_policy: if_not_present
+    container_name: deepresearch-redis
+    volumes:
+      - redis_data:/data
+    networks:
+      - deep_research_net
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -63,13 +83,18 @@ services:
     networks:
       - deep_research_net
     depends_on:
-      postgres:
+      mysql:
+        condition: service_healthy
+      redis:
         condition: service_healthy
       milvus:
         condition: service_healthy
     environment:
-      POSTGRES_DSN: postgresql://${POSTGRES_USER:-deepresearch}:${POSTGRES_PASSWORD:-deepresearch123}@postgres:5432/${POSTGRES_DB:-deepresearch}
-      REDIS_URL: ""
+      MYSQL_DSN: "mysql+pymysql://${MYSQL_USER:-deepresearch}:${MYSQL_PASSWORD:-deepresearch123}@mysql:3306/${MYSQL_DATABASE:-deepresearch}?charset=utf8mb4"
+      REDIS_URL: "redis://redis:6379"
+      CHECKPOINTER_BACKEND: redis
+      SHORT_TERM_BACKEND: mysql
+      LONG_TERM_BACKEND: mysql
       MILVUS_HOST: milvus
       MILVUS_PORT: 19530
     ports:
@@ -93,7 +118,9 @@ services:
 
 # ---- 命名卷 ----
 volumes:
-  pg_data:
+  mysql_data:
+    driver: local
+  redis_data:
     driver: local
   milvus_data:
     driver: local
