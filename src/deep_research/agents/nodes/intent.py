@@ -13,7 +13,7 @@ from .base import (
 from ..state import ResearchState
 from deep_research.utils import colorize, emit
 
-logger = logging.getLogger("mult_agents")
+logger = logging.getLogger("deep_research")
 
 
 def detect_intent(query: str) -> str:

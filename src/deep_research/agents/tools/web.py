@@ -8,7 +8,7 @@ import urllib.request
 
 from langchain_core.tools import tool
 
-logger = logging.getLogger("mult_agents")
+logger = logging.getLogger("deep_research")
 
 
 def bocha_web_search_records(query: str, count: int = 8) -> list[dict]:

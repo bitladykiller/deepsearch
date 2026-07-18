@@ -7,7 +7,7 @@ from langchain_core.tools import tool
 
 from deep_research.rag.core import RAGSystem, RAGConfig
 
-logger = logging.getLogger("mult_agents")
+logger = logging.getLogger("deep_research")
 
 # 全局 RAG 系统实例
 _RAG_SYSTEM: Optional[RAGSystem] = None

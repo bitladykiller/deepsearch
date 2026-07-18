@@ -16,7 +16,7 @@ from ..state import ResearchState
 from ..tools import bocha_web_search_records, search_knowledge_base_records
 from deep_research.utils import colorize, emit, collect_tool_calls, with_memory_context, log_inputs
 
-logger = logging.getLogger("mult_agents")
+logger = logging.getLogger("deep_research")
 
 
 # ---------------------------------------------------------------------------
