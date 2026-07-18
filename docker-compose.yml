@@ -12,6 +12,7 @@ services:
   # ---- PostgreSQL ----
   postgres:
     image: postgres:16-alpine
+    pull_policy: if_not_present
     container_name: deepresearch-postgres
     volumes:
       - pg_data:/var/lib/postgresql/data
@@ -31,6 +32,7 @@ services:
   # ---- Milvus (etcd 嵌入 + minio 单机) ----
   milvus:
     image: milvusdb/milvus:v2.5-latest
+    pull_policy: if_not_present
     container_name: deepresearch-milvus
     volumes:
       - milvus_data:/var/lib/milvus
@@ -52,6 +54,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      pull: if_not_present
     container_name: deepresearch-backend
     volumes:
       - ./config.json:/app/config.json:ro
@@ -78,6 +81,7 @@ services:
     build:
       context: ./front/agent_front
       dockerfile: Dockerfile
+      pull: if_not_present
     container_name: deepresearch-frontend
     networks:
       - deep_research_net
