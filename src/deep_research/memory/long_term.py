@@ -1,8 +1,8 @@
 """
 长期记忆模块
 
-提供语义记忆（Semantic）和情景记忆（Episodic）的持久化存储
-支持 PostgreSQL 和内存两种后端
+提供语义记忆（Semantic）和情景记忆（Episodic）的持久化存储。
+支持 MySQL 和 SQLite 两种后端，以及 Milvus 向量检索。
 """
 
 import json
@@ -76,8 +76,8 @@ class BaseLongTermMemory(BaseMemory, ABC):
 class SQLiteLongTermMemory(BaseLongTermMemory):
     """
     基于 SQLite 的长期记忆实现
-    
-    适合开发和测试环境，生产环境建议使用 PostgreSQL
+
+    适合开发和测试环境，生产环境建议使用 MySQL
     """
     
     def __init__(
