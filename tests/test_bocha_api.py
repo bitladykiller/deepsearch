@@ -66,7 +66,7 @@ def summarize_result(name: str, result: dict):
 
 
 def main():
-    api_key = "sk-6e8cb31f25f6421eb555e79ee12e910d"
+    api_key = os.getenv("BOCHA_API_KEY", "").strip()
     if not api_key:
         raise ValueError("缺少 BOCHA_API_KEY 环境变量")
     try:
